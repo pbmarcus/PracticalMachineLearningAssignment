@@ -1,0 +1,165 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Pieter"
+date: "17 november 2014"
+output: html_document
+---
+
+## Overall summary
+
+After reading in the data some pre-processing was necessary. 100 variables in the test set only contained missing values (NA's). The training set contained 6 variables with only missing values. These 100 variables are removed from the training and test set.
+
+There were 5 columns in the training set with more than half of the values that are unique. These variables are also removed from the training and test set.
+
+The remaining 55 variables were used to train 3 different machine learning models: Decision Tree, Random Forest and Gradient Boosting model. The models were fitted with 10-fold cross-validation based on a split where 80% was used to train the models and the 20% of the data was used as validation set to determine the most appropriate model to apply to the training set. The respective out-of-sample error on the validation set are: 0.50, 0.000764 and 0.004333.
+
+According to the lecture material the Random Forest model is sensitive to overfitting. The out-of-sample errors would suggest that both Random Forest and Gradient Boosting models perfectly predict the 20 test observations. Based on the overfitting of the Random Forest model, and no expected difference in error on the test set the Gradient Boosting model is used to make the final prediction.
+
+## 1. Background of the data
+
+Using devices such as _Jawbone Up, Nike FuelBand_, and _Fitbit_ it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+## 2. Loading the data 
+```{r}
+# On a MacBook
+setwd("~/Coursera/Practical Machine Learning/Assignment 1 writeup/")
+training <- read.csv(file = "pml-training.csv", na.strings = c('#DIV/0!'))
+testing  <- read.csv(file = "pml-testing.csv")
+```
+
+## 3. Preprocessing the data
+```{r, warning = FALSE}
+# 1. A lot of missing variables in both training and testing set.
+NA_sum_train <- apply(training, 2, function (x) { sum(is.na(x)) })
+NA_sum_test  <- apply(testing, 2, function (x) { sum(is.na(x)) })
+# Which variables only contain missing values in the training and testing set?
+# training set
+names(which(NA_sum_train == nrow(training)))
+# testing set
+head(names(which(NA_sum_test  == nrow(testing))))
+length(names(which(NA_sum_test  == nrow(testing)))) #100
+
+# combining together the variables with missing information from the training and testing set
+missingIdx <- unique(c(as.numeric(which(NA_sum_train  == nrow(training))),
+                       as.numeric(which(NA_sum_test  == nrow(testing)))))
+# Remove these variables from the training and test set, 60 variables remaining
+training <- training[, -missingIdx]
+testing  <- testing[ , -missingIdx]
+
+# 2. Remove the variables that contain high variability (more than 50% different values), 
+unique_train <- apply(training, 2, function (x) {ifelse(length(unique(x)) / length(x) >= 0.5, 1, 0)})
+
+training <- training[ , -as.numeric(which(unique_train == 1))]
+testing  <- testing[ , -as.numeric(which(unique_train == 1))]
+```
+
+## 4. Training, validation, testing preparation
+Load the necessary packages
+```{r, warning = FALSE}
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(doMC)
+registerDoMC(cores = 8) # set the number of cores to 8
+```
+
+#### 1. Split the training data into a training and a validation set.
+
+```{r}
+inTraining   <- createDataPartition(y = training$classe, p = 0.8, list = FALSE )
+train_set    <- training[ inTraining, ]
+dim(train_set)
+validate_set <- training[-inTraining, ]
+dim(validate_set)
+```
+
+#### 2. Fit a Decision Tree model 
+```{r}
+set.seed(123)
+# For training a Random forest model, centering and scaling are not necessary
+dtFit <- train(classe ~ ., method = "rpart", data = train_set, 
+               trControl = trainControl(method = "cv", number = 10))
+```
+The Decision Tree model doesn't fit well to the data.
+
+#### 3. Fit a Random Forest model 
+```{r}
+set.seed(123)
+# For training a Random forest model, centering and scaling are not necessary
+rfFit <- train(classe ~ ., method = "rf", data = train_set, 
+               trControl = trainControl(method = "cv", number = 10))
+```
+
+plot(rfFit, ylim = c(0.9, 1))
+
+For the best fitting model the classification error, the out-of-sample error is very small.
+The accuracy for 10-fold cross-validation with a high number of parameters very high and that may suggest overfitting of the Random Forest model.
+
+#### 3. Fit a Gradient Boosting model 
+```{r, warning = FALSE}
+set.seed(123)
+boostFit <- train(classe ~ ., method = "gbm", data = train_set, verbose = F, 
+                  trControl = trainControl(method = "cv", number = 10))
+```
+
+## 6. Evaluation of out-of-sample error
+```{r}
+# Make predictions on the validation set
+dtPred    <- predict(dtFit,    validate_set)
+rfPred    <- predict(rfFit,    validate_set)
+boostPred <- predict(boostFit, validate_set)
+```
+
+1. Decision Tree
+```{r}
+# Confusion matrix
+table(dtPred, validate_set$classe)
+# Out-of-sample error
+(nrow(validate_set) - sum(as.numeric(diag(table(dtPred, validate_set$classe))))) / nrow(validate_set)
+```
+
+2. Random Forest
+```{r}
+# Confusion matrix
+table(rfPred, validate_set$classe)
+# Out-of-sample error
+(nrow(validate_set) - sum(as.numeric(diag(table(rfPred, validate_set$classe))))) / nrow(validate_set)
+```
+
+3. Gradient Boosting
+```{r}
+# Confusion matrix
+table(boostPred, validate_set$classe)
+# Out-of-sample error
+(nrow(validate_set) - sum(as.numeric(diag(table(boostPred, validate_set$classe))))) / nrow(validate_set)
+```
+
+The evaluation of the different models show that the Random Forest model has the smallest out-of-sample error on the validation set. However, we saw that the Random Forest model tend to overfit, therefore the Gradient Boosting model will be applied to the final testing set.
+
+
+## 7. Make prediction on the model with the lowest out-of-sample error
+Use the following chunk of code:
+
+```{r}
+finalPrediction <- predict(boostFit, testing)
+```
+
+## 8. Prediction assignment submission
+The function from the Coursera page to do the evaluation
+```{r}
+pml_write_files = function(x) {
+  n = length(x)
+  for (i in 1:n) {
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+```
+
+Finally, write the predictions to disk
+```{r}
+# set a working directory for the output
+setwd('~/Coursera/Practical Machine Learning/Assignment 2 submission')
+pml_write_files(finalPrediction)
+```
+
